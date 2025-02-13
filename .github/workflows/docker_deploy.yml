@@ -54,10 +54,10 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # Step 8: Build Docker Image (Dockerfile is outside To_do_app)
+      # Step 8: Build Docker Image (Use "." as context so Dockerfile has access)
       - name: Build Docker Image
         run: |
-          docker build -t ${{ secrets.DOCKER_USERNAME }}/todo-app:latest -f Dockerfile To_do_app/
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/todo-app:latest -f Dockerfile .
 
       # Step 9: Push Docker Image to Docker Hub
       - name: Push Docker Image
