@@ -1,0 +1,65 @@
+name: Multi-Environment Deployment
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-deploy:
+    name: Build, Test, and Push Docker Image
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Step 2: Set up Node.js
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: To_do_app/package-lock.json
+
+      # Step 3: Install dependencies
+      - name: Install dependencies
+        run: npm ci
+        working-directory: To_do_app
+
+      # Step 4: Run tests (only for test branch)
+      - name: Run tests
+        if: github.ref_name == 'main'
+        run: npm test
+        working-directory: To_do_app
+
+      # Step 5: Build the app
+      - name: Build the app
+        run: npm run build --verbose
+        working-directory: To_do_app
+
+      # Step 6: List dist directory for debugging
+      - name: List dist directory
+        run: ls -alh To_do_app/dist || echo "Dist directory not found"
+
+      # Step 7: Log in to Docker Hub
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      # Step 8: Build Docker Image (Dockerfile is outside To_do_app)
+      - name: Build Docker Image
+        run: |
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/todo-app:latest -f Dockerfile To_do_app/
+
+      # Step 9: Push Docker Image to Docker Hub
+      - name: Push Docker Image
+        run: |
+          docker push ${{ secrets.DOCKER_USERNAME }}/todo-app:latest
