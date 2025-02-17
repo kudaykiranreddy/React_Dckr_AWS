@@ -1,98 +1,122 @@
 name: Multi-Environment Deployment
-
+ 
 on:
   push:
     branches:
       - main
   workflow_dispatch:
-
+ 
 permissions:
   contents: write
-
+ 
 jobs:
   build-and-deploy:
-    name: Build, Push, and Deploy to EC2
+    name: Build, Test, and Push Docker Image
     runs-on: ubuntu-latest
-
+ 
     steps:
       # Step 1: Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
+ 
+      # Step 2: Set up Node.js
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: To_do_app/package-lock.json
+ 
+      # Step 3: Install dependencies
+      - name: Install dependencies
+        run: npm ci
+        working-directory: To_do_app
+ 
+      # Step 4: Run tests (only for main branch)
+      - name: Run tests
+        if: github.ref_name == 'main'
+        run: npm test
+        working-directory: To_do_app
+ 
+      # Step 5: Build the app
+      - name: Build the app
+        run: npm run build --verbose
+        working-directory: To_do_app
+ 
+      # Step 6: List dist directory for debugging
+      - name: List dist directory
+        run: ls -alh To_do_app/dist || echo "Dist directory not found"
+ 
+      # Step 7: SonarQube analysis
+      - name: Run SonarQube analysis
+        if: github.ref_name == 'main'
+        run: |
+          echo "🔍 Running SonarQube analysis..."
+          cd To_do_app
 
-      # Step 2: Log in to Docker Hub
+          # Run tests with coverage
+          npm install  # Ensure dependencies are installed
+          npm run test -- --coverage || { echo "❌ Tests failed"; exit 1; }
+
+          # Run SonarQube analysis
+          sonar-scanner \
+            -Dsonar.projectKey=my-react-app \
+            -Dsonar.projectName="My React Application" \
+            -Dsonar.projectVersion=1.0.0 \
+            -Dsonar.sources=src \
+            -Dsonar.exclusions=**/node_modules/**,**/*.test.js,**/*.spec.js \
+            -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info \
+            -Dsonar.host.url=${{ secrets.SONARQUBE_URL }} \
+            -Dsonar.login=${{ secrets.SONARQUBE_TOKEN }} || { echo "❌ SonarQube analysis failed"; exit 1; }
+
+      # Step 8: Fetch SonarQube Analysis Results and Fail if Coverage < 80%
+      - name: Check SonarQube Coverage
+        if: github.ref_name == 'main'
+        run: |
+          echo "🔍 Fetching SonarQube analysis results..."
+          sleep 30  # Wait for SonarQube to process results
+
+          # Fetch the analysis results via SonarQube API
+          RESPONSE=$(curl -s -u ${{ secrets.SONARQUBE_TOKEN }} \
+            "${{ secrets.SONARQUBE_URL }}/api/measures/component?component=${{ secrets.SONARQUBE_PROJECT_KEY }}&metricKeys=bugs,vulnerabilities,code_smells,coverage,duplicated_lines_density")
+
+          # Extract values using jq
+          BUGS=$(echo $RESPONSE | jq -r '.component.measures[] | select(.metric=="bugs") | .value')
+          VULNERABILITIES=$(echo $RESPONSE | jq -r '.component.measures[] | select(.metric=="vulnerabilities") | .value')
+          CODE_SMELLS=$(echo $RESPONSE | jq -r '.component.measures[] | select(.metric=="code_smells") | .value')
+          COVERAGE=$(echo $RESPONSE | jq -r '.component.measures[] | select(.metric=="coverage") | .value')
+          DUPLICATIONS=$(echo $RESPONSE | jq -r '.component.measures[] | select(.metric=="duplicated_lines_density") | .value')
+
+          # Print the results
+          echo "Bugs: $BUGS"
+          echo "Vulnerabilities: $VULNERABILITIES"
+          echo "Code Smells: $CODE_SMELLS"
+          echo "Coverage: $COVERAGE%"
+          echo "Duplications: $DUPLICATIONS%"
+
+          # Fail the pipeline if coverage is below 80%
+          COVERAGE_VALUE=$(echo $COVERAGE | awk '{print ($1+0)}')  # Convert to number
+          if (( $(echo "$COVERAGE_VALUE < 80" | bc -l) )); then
+            echo "❌ Code coverage is below 80%! Failing the pipeline."
+            exit 1
+          else
+            echo "✅ Code coverage meets the required threshold."
+          fi
+
+      # Step 9: Log in to Docker Hub
       - name: Log in to Docker Hub
         uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
-
-      # Step 3: Build Docker Image
+ 
+      # Step 10: Build Docker Image
       - name: Build Docker Image
         run: |
           docker build -t ${{ secrets.DOCKER_USERNAME }}/todo-app:latest .
         working-directory: To_do_app
-
-      # Step 4: Push Docker Image to Docker Hub
+ 
+      # Step 11: Push Docker Image to Docker Hub
       - name: Push Docker Image
         run: |
           docker push ${{ secrets.DOCKER_USERNAME }}/todo-app:latest
-
-      # Step 5: Deploy to EC2
-      - name: Deploy to EC2
-        env:
-          PRIVATE_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
-          HOST: ${{ secrets.EC2_PUBLIC_IP }}
-          USER: ec2-user
-        run: |
-          echo "$PRIVATE_KEY" > private_key.pem
-          chmod 600 private_key.pem
-          ssh -i private_key.pem -o StrictHostKeyChecking=no $USER@$HOST << 'EOF'
-            echo "🚀 Checking if Docker is installed..."
-            if ! command -v docker &> /dev/null; then
-                echo "⚡ Installing Docker..."
-                sudo yum update -y
-                sudo yum install -y docker
-                sudo systemctl start docker
-                sudo systemctl enable docker
-                sudo usermod -aG docker ec2-user
-                echo "✅ Docker installed successfully."
-            else
-                echo "✅ Docker is already installed."
-            fi
-
-            echo "🚀 Deploying the latest image..."
-            sudo docker pull ${{ secrets.DOCKER_USERNAME }}/todo-app:latest
-            sudo docker stop todo-app || true
-            sudo docker rm todo-app || true
-            sudo docker run -d -p 80:80 --name todo-app ${{ secrets.DOCKER_USERNAME }}/todo-app:latest
-            echo "🎉 Deployment successful! Access the app at http://$HOST"
-          EOF
-
-  rollback-on-failure:
-    name: Rollback on Failure
-    runs-on: ubuntu-latest
-    needs: build-and-deploy
-    if: failure()
-
-    steps:
-      - name: Configure SSH and Rollback
-        env:
-          PRIVATE_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
-          HOST: ${{ secrets.EC2_PUBLIC_IP }}
-          USER: ec2-user
-        run: |
-          echo "$PRIVATE_KEY" > private_key.pem
-          chmod 600 private_key.pem
-          ssh -i private_key.pem -o StrictHostKeyChecking=no $USER@$HOST << 'EOF'
-            echo "🚨 Rolling back to previous version..."
-            PREVIOUS_IMAGE=$(sudo docker images --format "{{.Repository}}:{{.Tag}}" | grep todo-app | sed -n 2p)
-            if [ -n "$PREVIOUS_IMAGE" ]; then
-                sudo docker stop todo-app || true
-                sudo docker rm todo-app || true
-                sudo docker run -d -p 80:3000 --name todo-app $PREVIOUS_IMAGE
-                echo "✅ Rolled back to $PREVIOUS_IMAGE"
-            else
-                echo "❌ No previous image found. Rollback failed!"
-                exit 1
-            fi
-          EOF
