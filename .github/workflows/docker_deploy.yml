@@ -37,7 +37,7 @@ jobs:
         run: |
           docker push ${{ secrets.DOCKER_USERNAME }}/todo-app:latest
 
-      # Step 5: Deploy to EC2 instance
+      # Step 5: Deploy to EC2
       - name: Deploy to EC2
         env:
           PRIVATE_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
@@ -89,7 +89,7 @@ jobs:
             if [ -n "$PREVIOUS_IMAGE" ]; then
                 sudo docker stop todo-app || true
                 sudo docker rm todo-app || true
-                sudo docker run -d -p 80:80 --name todo-app $PREVIOUS_IMAGE
+                sudo docker run -d -p 80:3000 --name todo-app $PREVIOUS_IMAGE
                 echo "✅ Rolled back to $PREVIOUS_IMAGE"
             else
                 echo "❌ No previous image found. Rollback failed!"
