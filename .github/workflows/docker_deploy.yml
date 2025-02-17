@@ -37,7 +37,7 @@ jobs:
         run: |
           docker push ${{ secrets.DOCKER_USERNAME }}/todo-app:latest
 
-      # Step 5: Deploy to EC2
+      # Step 5: Deploy to EC2 instance
       - name: Deploy to EC2
         env:
           PRIVATE_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
